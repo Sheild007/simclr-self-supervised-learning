@@ -99,6 +99,11 @@ def denormalize_cifar10(tensor: torch.Tensor) -> torch.Tensor:
     return torch.clamp(tensor * std + mean, 0, 1)
 
 
+def plot_augmentation_examples(originals,view1s,view2s,save_path: str | Path,n_rows: int = 10 ) -> None:
+    
+    save_augmentation_grid(originals, view1s, view2s, out_path=save_path, max_rows=n_rows)
+
+
 def save_augmentation_grid(originals, view1s, view2s, out_path: str | Path, max_rows: int = 10) -> None:
     """Save a grid: Original | View 1 | View 2."""
     out_path = Path(out_path)
