@@ -1,4 +1,7 @@
 from __future__ import annotations
+
+from typing import Callable, Tuple
+
 import torchvision.transforms as T
 
 
@@ -6,7 +9,7 @@ CIFAR10_MEAN: tuple[float, float, float] = (0.4914, 0.4822, 0.4465)
 CIFAR10_STD: tuple[float, float, float] = (0.2470, 0.2435, 0.2616)
 
 
-def build_supervised_train_transform() -> T.Compose:  
+def build_supervised_train_transform() -> T.Compose:
     return T.Compose([
         T.RandomCrop(32, padding=4, padding_mode="reflect"),
         T.RandomHorizontalFlip(p=0.5),
@@ -22,9 +25,24 @@ def build_eval_transform() -> T.Compose:
     ])
 
 
+def build_simclr_transform() -> T.Compose:
+
+    return T.Compose([
+        T.RandomResizedCrop(size=32, scale=(0.2, 1.0)),
+        T.RandomHorizontalFlip(p=0.5),
+        T.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1),
+        T.RandomGrayscale(p=0.2),
+        T.ToTensor(),
+        T.Normalize(CIFAR10_MEAN, CIFAR10_STD),
+    ])
+
+
+
 __all__ = [
     "CIFAR10_MEAN",
     "CIFAR10_STD",
     "build_supervised_train_transform",
     "build_eval_transform",
+    "build_simclr_transform",
+    "TwoViewTransform",
 ]
