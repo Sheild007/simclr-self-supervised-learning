@@ -10,35 +10,26 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 
 from utils.seed import set_seed
-from utils.dataset_splits import (
-    SEED,
-    build_labeled_train_dataset,
-    build_val_dataset,
-    build_test_dataset,
-    build_loader,
-)
-from utils.augmentations import (
-    build_supervised_train_transform,
-    build_eval_transform,
-)
+from utils.dataset_splits import SEED, build_labeled_train_dataset, build_val_dataset, build_test_dataset, build_loader
+from utils.augmentations import build_supervised_train_transform, build_eval_transform
 from utils.models import ClassifierModel
-from utils.metrics import (
-    evaluate_classifier,
-    collect_predictions,
-    compute_confusion_matrix,
-)
+from utils.metrics import evaluate_classifier, collect_predictions, compute_confusion_matrix
 from utils.visualization import plot_loss_curves, plot_confusion_matrix, ensure_dir
 
 
-   
 BATCH_SIZE: int = 64
 EPOCHS: int = 20
 LEARNING_RATE: float = 3e-4
-NUM_WORKERS: int = 0  # CPU-only friendly default; bump on a real machine
+NUM_WORKERS: int = 0
+
+# Early-stopping settings (val accuracy is the monitored metric)
+PATIENCE: int = 5          # stop if val_acc does not improve for this many epochs
+MIN_DELTA: float = 1e-4    # must improve by at least this much to count as progress
 
 LOSS_PLOT_PATH: str = "graphs/supervised_loss.png"
 CONFMAT_PATH: str = "results/supervised_confusion_matrix.png"
 METRICS_PARTIAL_PATH: str = "results/metrics_supervised.json"
+BEST_CKPT_PATH: str = "models/supervised_best.pt"
 
 CIFAR10_CLASS_NAMES = (
     "airplane", "automobile", "bird", "cat", "deer",
@@ -53,7 +44,6 @@ def train_one_epoch(
     criterion: nn.Module,
     device: torch.device,
 ) -> float:
-    """Run one supervised training epoch and return the mean cross-entropy loss."""
     model.train()
     total_loss = 0.0
     total_examples = 0
@@ -75,28 +65,21 @@ def train_one_epoch(
     return total_loss / max(total_examples, 1)
 
 
-
 def run_supervised_baseline(
     epochs: int = EPOCHS,
     batch_size: int = BATCH_SIZE,
     learning_rate: float = LEARNING_RATE,
+    patience: int = PATIENCE,
+    min_delta: float = MIN_DELTA,
     device: torch.device | None = None,
 ) -> Dict[str, float]:
-    """Train ResNet-18 from scratch on 10% labels and report test accuracy.
-
-    Returns a dict with at least the keys consumed by ``metrics.json``:
-        ``test_accuracy``, ``test_loss``, ``best_val_accuracy``,
-        ``best_val_epoch``, ``epochs_run``.
-
-    Side effects:
-        - writes ``graphs/supervised_loss.png``
-        - writes ``results/supervised_confusion_matrix.png``
-        - writes a partial ``results/metrics_supervised.json``
-    """
     set_seed()
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"[task1] device={device}, epochs={epochs}, batch_size={batch_size}")
+    print(
+        f"[task1] device={device}, epochs={epochs}, batch_size={batch_size}, "
+        f"patience={patience}, min_delta={min_delta}"
+    )
 
     train_transform = build_supervised_train_transform()
     eval_transform = build_eval_transform()
@@ -104,23 +87,11 @@ def run_supervised_baseline(
     train_ds = build_labeled_train_dataset(transform=train_transform)
     val_ds = build_val_dataset(transform=eval_transform)
     test_ds = build_test_dataset(transform=eval_transform)
-    print(
-        f"[task1] dataset sizes: train={len(train_ds)} val={len(val_ds)} test={len(test_ds)}"
-    )
+    print(f"[task1] dataset sizes: train={len(train_ds)} val={len(val_ds)} test={len(test_ds)}")
 
-    train_loader = build_loader(
-        train_ds,
-        batch_size=batch_size,
-        shuffle=True,
-        num_workers=NUM_WORKERS,
-        drop_last=False,
-    )
-    val_loader = build_loader(
-        val_ds, batch_size=batch_size, shuffle=False, num_workers=NUM_WORKERS
-    )
-    test_loader = build_loader(
-        test_ds, batch_size=batch_size, shuffle=False, num_workers=NUM_WORKERS
-    )
+    train_loader = build_loader(train_ds, batch_size=batch_size, shuffle=True, num_workers=NUM_WORKERS, drop_last=False)
+    val_loader = build_loader(val_ds, batch_size=batch_size, shuffle=False, num_workers=NUM_WORKERS)
+    test_loader = build_loader(test_ds, batch_size=batch_size, shuffle=False, num_workers=NUM_WORKERS)
 
     model = ClassifierModel(num_classes=10).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
@@ -131,6 +102,11 @@ def run_supervised_baseline(
     val_accuracies: List[float] = []
     best_val_accuracy = 0.0
     best_val_epoch = 0
+    epochs_without_improvement = 0
+    early_stopped = False
+    epochs_run = 0
+
+    ensure_dir(Path(BEST_CKPT_PATH).parent)
 
     for epoch in range(1, epochs + 1):
         epoch_start = time.time()
@@ -140,22 +116,47 @@ def run_supervised_baseline(
         train_losses.append(train_loss)
         val_losses.append(val_metrics["loss"])
         val_accuracies.append(val_metrics["accuracy"])
+        epochs_run = epoch
 
-        if val_metrics["accuracy"] > best_val_accuracy:
+        improved = val_metrics["accuracy"] > best_val_accuracy + min_delta
+        marker = ""
+        if improved:
             best_val_accuracy = val_metrics["accuracy"]
             best_val_epoch = epoch
+            epochs_without_improvement = 0
+            torch.save(model.state_dict(), BEST_CKPT_PATH)
+            marker = "  [best->saved]"
+        else:
+            epochs_without_improvement += 1
 
         print(
             f"[task1] epoch {epoch:02d}/{epochs} | "
             f"train_loss={train_loss:.4f} | "
             f"val_loss={val_metrics['loss']:.4f} | "
             f"val_acc={val_metrics['accuracy']*100:.2f}% | "
+            f"no_improve={epochs_without_improvement}/{patience} | "
             f"time={time.time() - epoch_start:.1f}s"
+            f"{marker}"
         )
+
+        if epochs_without_improvement >= patience:
+            print(
+                f"[task1] early stopping at epoch {epoch} "
+                f"(no improvement for {patience} epochs)"
+            )
+            early_stopped = True
+            break
+
+    if Path(BEST_CKPT_PATH).exists():
+        print(
+            f"[task1] reloading best checkpoint from {BEST_CKPT_PATH} "
+            f"(epoch {best_val_epoch}, val_acc={best_val_accuracy*100:.2f}%)"
+        )
+        model.load_state_dict(torch.load(BEST_CKPT_PATH, map_location=device))
 
     test_metrics = evaluate_classifier(model, test_loader, device, criterion)
     print(
-        f"[task1] FINAL | test_loss={test_metrics['loss']:.4f} | "
+        f"[task1] BEST CKPT TEST | test_loss={test_metrics['loss']:.4f} | "
         f"test_acc={test_metrics['accuracy']*100:.2f}%"
     )
 
@@ -164,7 +165,7 @@ def run_supervised_baseline(
         train_losses,
         val_losses,
         out_path=LOSS_PLOT_PATH,
-        title=f"Supervised baseline (10% labels) — {epochs} epochs",
+        title=f"Supervised baseline (10% labels) — {epochs_run}/{epochs} epochs",
         val_accuracies=val_accuracies,
     )
     print(f"[task1] saved {LOSS_PLOT_PATH}")
@@ -184,10 +185,15 @@ def run_supervised_baseline(
         "test_loss": float(test_metrics["loss"]),
         "best_val_accuracy": float(best_val_accuracy),
         "best_val_epoch": int(best_val_epoch),
-        "epochs_run": int(epochs),
+        "epochs_run": int(epochs_run),
+        "epochs_planned": int(epochs),
+        "early_stopped": bool(early_stopped),
+        "patience": int(patience),
+        "min_delta": float(min_delta),
         "batch_size": int(batch_size),
         "learning_rate": float(learning_rate),
         "seed": int(SEED),
+        "best_checkpoint": BEST_CKPT_PATH,
     }
 
     ensure_dir(Path(METRICS_PARTIAL_PATH).parent)
