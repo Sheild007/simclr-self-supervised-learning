@@ -1,0 +1,9 @@
+{
+  "same_view_similarity_before": 0.9913344383239746,
+  "different_image_similarity_before": 0.9891988039016724,
+  "gap_before": 0.002135634422302246,
+  "eval_batch_size": 64,
+  "small_batch_for_heatmap": 8,
+  "encoder": "CIFARResNet18 (random init, untrained)",
+  "split": "val (first 64 images)"
+}
