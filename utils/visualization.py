@@ -104,6 +104,40 @@ def plot_augmentation_examples(originals,view1s,view2s,save_path: str | Path,n_r
     save_augmentation_grid(originals, view1s, view2s, out_path=save_path, max_rows=n_rows)
 
 
+def plot_similarity_heatmap(matrix,out_path: str | Path,title: str = "Cosine similarity",batch_size: int | None = None,) -> None:
+    
+    if isinstance(matrix, torch.Tensor):
+        matrix = matrix.detach().cpu().numpy()
+    matrix = np.asarray(matrix)
+
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    fig, ax = plt.subplots(figsize=(6.5, 5.5))
+    im = ax.imshow(matrix, vmin=-1.0, vmax=1.0, cmap="RdBu_r")
+    ax.set_title(title)
+    ax.set_xlabel("view index")
+    ax.set_ylabel("view index")
+    fig.colorbar(im, ax=ax, label="cosine similarity")
+
+    if batch_size is not None:
+        n = int(batch_size)
+        two_n = matrix.shape[0]
+        if two_n == 2 * n:
+            from matplotlib.patches import Rectangle
+            # Positive-pair blocks: top-right and bottom-left N x N diagonals.
+            ax.add_patch(Rectangle((n - 0.5, -0.5), n, n,
+                                   fill=False, edgecolor="black",
+                                   linewidth=0.8, linestyle="--"))
+            ax.add_patch(Rectangle((-0.5, n - 0.5), n, n,
+                                   fill=False, edgecolor="black",
+                                   linewidth=0.8, linestyle="--"))
+
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=200)
+    plt.close(fig)
+
+
 def save_augmentation_grid(originals, view1s, view2s, out_path: str | Path, max_rows: int = 10) -> None:
     """Save a grid: Original | View 1 | View 2."""
     out_path = Path(out_path)
