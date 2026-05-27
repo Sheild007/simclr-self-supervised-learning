@@ -162,6 +162,25 @@ def save_augmentation_grid(originals, view1s, view2s, out_path: str | Path, max_
     plt.close(fig)
 
 
+def plot_accuracy_curves(curves: dict,out_path: str | Path,title: str = "Validation accuracy",) -> None:
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig, ax = plt.subplots(figsize=(8, 5))
+    for name, accs in curves.items():
+        accs_pct = np.asarray(accs, dtype=np.float64) * 100.0
+        epochs = np.arange(1, len(accs_pct) + 1)
+        ax.plot(epochs, accs_pct, marker="o", linewidth=1.5, label=name)
+    ax.set_xlabel("Epoch")
+    ax.set_ylabel("Validation accuracy (%)")
+    ax.set_title(title)
+    ax.set_ylim(0, 100)
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc="lower right")
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=200)
+    plt.close(fig)
+
+
 def save_2d_feature_plot(
     features: np.ndarray,
     labels: np.ndarray,
