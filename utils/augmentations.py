@@ -37,6 +37,14 @@ def build_simclr_transform() -> T.Compose:
     ])
 
 
+class TwoViewTransform:
+ 
+    def __init__(self, transform: Callable):
+        self.transform = transform
+
+    def __call__(self, x) -> Tuple:
+        return self.transform(x), self.transform(x)
+
 
 __all__ = [
     "CIFAR10_MEAN",
