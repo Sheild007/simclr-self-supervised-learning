@@ -88,6 +88,22 @@ def evaluate_classifier(model: nn.Module,loader: Iterable,device: torch.device,c
 
 
 @torch.no_grad()
+def extract_features(encoder: nn.Module,loader: Iterable,device: torch.device,) -> Tuple[np.ndarray, np.ndarray]:
+    
+    encoder.eval()
+    feat_chunks: List[np.ndarray] = []
+    label_chunks: List[int] = []
+    for images, targets in loader:
+        images = images.to(device, non_blocking=True)
+        feats = encoder(images).detach().cpu().numpy()
+        feat_chunks.append(feats)
+        label_chunks.extend(targets.tolist())
+    if not feat_chunks:
+        return np.zeros((0, 0), dtype=np.float32), np.asarray(label_chunks, dtype=np.int64)
+    return np.concatenate(feat_chunks, axis=0), np.asarray(label_chunks, dtype=np.int64)
+
+
+@torch.no_grad()
 def collect_predictions(model: nn.Module,loader: Iterable,device: torch.device,) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     
     model.eval()
