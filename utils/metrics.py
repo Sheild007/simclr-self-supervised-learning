@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Iterable, List, Tuple
 
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
-from sklearn.metrics import ConfusionMatrixDisplay, accuracy_score, confusion_matrix
+from sklearn.metrics import confusion_matrix
 
 
 CIFAR10_CLASSES = [
@@ -18,49 +16,12 @@ CIFAR10_CLASSES = [
 ]
 
 
-def top1_accuracy_from_logits(logits: torch.Tensor, targets: torch.Tensor) -> float:
-    preds = logits.argmax(dim=1)
-    return (preds == targets).float().mean().item()
-
-
-def compute_accuracy(y_true: list[int] | np.ndarray, y_pred: list[int] | np.ndarray) -> float:
-    return float(accuracy_score(y_true, y_pred))
-
-
 def compute_confusion_matrix(y_true: list[int] | np.ndarray, y_pred: list[int] | np.ndarray) -> np.ndarray:
     return confusion_matrix(y_true, y_pred, labels=list(range(10)))
 
 
-def per_class_accuracy(y_true: list[int] | np.ndarray, y_pred: list[int] | np.ndarray) -> dict[str, float]:
-    cm = compute_confusion_matrix(y_true, y_pred)
-    result: dict[str, float] = {}
-    for i, cls_name in enumerate(CIFAR10_CLASSES):
-        denom = cm[i].sum()
-        result[cls_name] = float(cm[i, i] / denom) if denom else 0.0
-    return result
-
-
-def save_confusion_matrix(
-    y_true: list[int] | np.ndarray,
-    y_pred: list[int] | np.ndarray,
-    out_path: str | Path,
-    title: str = "Confusion Matrix",
-) -> None:
-    out_path = Path(out_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    cm = compute_confusion_matrix(y_true, y_pred)
-    fig, ax = plt.subplots(figsize=(8, 8))
-    disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=CIFAR10_CLASSES)
-    disp.plot(ax=ax, xticks_rotation=45, colorbar=False)
-    ax.set_title(title)
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=200)
-    plt.close(fig)
-
-
 @torch.no_grad()
-def evaluate_classifier(model: nn.Module,loader: Iterable,device: torch.device,criterion: nn.Module | None = None,) -> dict[str, float]:
-    
+def evaluate_classifier(model: nn.Module, loader: Iterable, device: torch.device, criterion: nn.Module | None = None) -> dict[str, float]:
     if criterion is None:
         criterion = nn.CrossEntropyLoss()
     model.eval()
@@ -88,8 +49,7 @@ def evaluate_classifier(model: nn.Module,loader: Iterable,device: torch.device,c
 
 
 @torch.no_grad()
-def extract_features(encoder: nn.Module,loader: Iterable,device: torch.device,) -> Tuple[np.ndarray, np.ndarray]:
-    
+def extract_features(encoder: nn.Module, loader: Iterable, device: torch.device) -> Tuple[np.ndarray, np.ndarray]:
     encoder.eval()
     feat_chunks: List[np.ndarray] = []
     label_chunks: List[int] = []
@@ -104,8 +64,7 @@ def extract_features(encoder: nn.Module,loader: Iterable,device: torch.device,) 
 
 
 @torch.no_grad()
-def collect_predictions(model: nn.Module,loader: Iterable,device: torch.device,) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    
+def collect_predictions(model: nn.Module, loader: Iterable, device: torch.device) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     model.eval()
 
     y_true_list: List[int] = []

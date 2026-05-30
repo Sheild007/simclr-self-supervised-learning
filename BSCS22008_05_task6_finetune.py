@@ -1,219 +1,153 @@
 from __future__ import annotations
 
-import csv
-import json
-import time
+import csv, json, time
 from pathlib import Path
-from typing import Dict, List
+from typing import List
 
 import numpy as np
 import torch
 import torch.nn as nn
 from torch.optim import Adam
 
-from utils.augmentations import (
-    build_eval_transform,
-    build_supervised_train_transform,
-)
-from utils.dataset_splits import (
-    SEED,
-    IndexedSubset,
-    build_labeled_train_dataset,
-    build_loader,
-    build_test_dataset,
-    build_val_dataset,
-    get_cifar10_train,
-    load_indices,
-)
-from utils.metrics import (
-    collect_predictions,
-    evaluate_classifier,
-    extract_features,
-)
-from utils.models import (
-    CIFARResNet18,
-    ClassifierModel,
-    load_encoder_weights,
-)
+from utils.augmentations import build_eval_transform, build_supervised_train_transform
+from utils.dataset_splits import SEED, IndexedSubset, build_labeled_train_dataset, build_loader, build_test_dataset, build_val_dataset, get_cifar10_train, load_indices
+from utils.metrics import collect_predictions, evaluate_classifier, extract_features
+from utils.models import CIFARResNet18, ClassifierModel, load_encoder_weights
 from utils.seed import set_seed
-from utils.visualization import (
-    ensure_dir,
-    plot_accuracy_curves,
-    save_2d_feature_plot,
-)
+from utils.visualization import ensure_dir, plot_accuracy_curves, save_2d_feature_plot
 
 
-BATCH_SIZE: int = 64
-EPOCHS: int = 20
-LEARNING_RATE: float = 3e-4
+BATCH_SIZE = 64
+EPOCHS = 20
+LR = 3e-4
 
-SIMCLR_ENCODER_CKPT: str = "models/simclr_encoder.pt"
-FINETUNED_CKPT: str = "models/finetuned_model.pt"
-FT_PLOT: str = "graphs/finetuning_accuracy.png"
-RESULTS_JSON: str = "results/metrics_finetune.json"
-TEST_PREDS_CSV: str = "results/test_predictions.csv"
+SIMCLR_CKPT = "models/simclr_encoder.pt"
+FT_CKPT = "models/finetuned_model.pt"
+FT_PLOT = "graphs/finetuning_accuracy.png"
+RESULTS_OUT = "results/metrics_finetune.json"
+PREDS_OUT = "results/test_predictions.csv"
 
-PCA_TSNE_METHOD: str = "tsne"        # spec allows pca or tsne
-PCA_TSNE_NUM_IMAGES: int = 1000
-RAND_PCA_PNG: str = "results/random_encoder_tsne.png"
-SIMCLR_PCA_PNG: str = "results/simclr_encoder_tsne.png"
-FT_PCA_PNG: str = "results/finetuned_encoder_tsne.png"
+VIZ_METHOD = "tsne"
+VIZ_NUM = 1000
+PLOT_RAND = "results/random_encoder_tsne.png"
+PLOT_SIMCLR = "results/simclr_encoder_tsne.png"
+PLOT_FT = "results/finetuned_encoder_tsne.png"
 
 
-def _build_loaders():
-    train_ds = build_labeled_train_dataset(transform=build_supervised_train_transform())
-    val_ds = build_val_dataset(transform=build_eval_transform())
-    test_ds = build_test_dataset(transform=build_eval_transform())
+def make_loaders():
+    tr = build_labeled_train_dataset(transform=build_supervised_train_transform())
+    va = build_val_dataset(transform=build_eval_transform())
+    te = build_test_dataset(transform=build_eval_transform())
     return (
-        build_loader(train_ds, batch_size=BATCH_SIZE, shuffle=True),
-        build_loader(val_ds, batch_size=BATCH_SIZE, shuffle=False),
-        build_loader(test_ds, batch_size=BATCH_SIZE, shuffle=False),
+        build_loader(tr, batch_size=BATCH_SIZE, shuffle=True),
+        build_loader(va, batch_size=BATCH_SIZE, shuffle=False),
+        build_loader(te, batch_size=BATCH_SIZE, shuffle=False),
     )
 
 
-def fine_tune_simclr(device: torch.device) -> Dict:
-    
+def fine_tune_simclr(device):
     model = ClassifierModel().to(device)
-    load_encoder_weights(model.encoder, SIMCLR_ENCODER_CKPT, map_location=device)
-    optimizer = Adam(model.parameters(), lr=LEARNING_RATE)
-    criterion = nn.CrossEntropyLoss()
+    load_encoder_weights(model.encoder, SIMCLR_CKPT, map_location=device)
 
-    train_loader, val_loader, test_loader = _build_loaders()
+    opt = Adam(model.parameters(), lr=LR)
+    crit = nn.CrossEntropyLoss()
+    train_loader, val_loader, test_loader = make_loaders()
 
-    val_accuracies: List[float] = []
-    best_state: Dict[str, torch.Tensor] | None = None
-    best_val = -1.0
-    best_epoch = 0
+    accs: List[float] = []
+    best_state, best_acc, best_epoch = None, -1.0, 0
 
-    print(f"[finetune] {EPOCHS} epochs on {device}")
+    print(f"fine-tuning {EPOCHS} epochs on {device}")
     for epoch in range(1, EPOCHS + 1):
         model.train()
-        epoch_start = time.time()
-        running_loss = 0.0
-        seen = 0
-        for images, targets in train_loader:
-            images = images.to(device, non_blocking=True)
-            targets = targets.to(device, non_blocking=True)
-            logits = model(images)
-            loss = criterion(logits, targets)
-            optimizer.zero_grad(set_to_none=True)
+        t0 = time.time()
+        run, seen = 0.0, 0
+        for x, y in train_loader:
+            x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
+            loss = crit(model(x), y)
+            opt.zero_grad(set_to_none=True)
             loss.backward()
-            optimizer.step()
-            running_loss += loss.item() * targets.size(0)
-            seen += targets.size(0)
-        train_loss = running_loss / max(seen, 1)
+            opt.step()
+            run += loss.item() * y.size(0)
+            seen += y.size(0)
 
-        val_metrics = evaluate_classifier(model, val_loader, device, criterion)
-        val_accuracies.append(val_metrics["accuracy"])
-        if val_metrics["accuracy"] > best_val:
-            best_val = val_metrics["accuracy"]
-            best_epoch = epoch
+        vm = evaluate_classifier(model, val_loader, device, crit)
+        accs.append(vm["accuracy"])
+        if vm["accuracy"] > best_acc:
+            best_acc, best_epoch = vm["accuracy"], epoch
             best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
 
-        print(
-            f"[finetune] {epoch:02d}/{EPOCHS} "
-            f"train_loss={train_loss:.4f} "
-            f"val_loss={val_metrics['loss']:.4f} "
-            f"val_acc={val_metrics['accuracy']*100:.2f}% "
-            f"time={time.time()-epoch_start:.1f}s"
-        )
+        print(f"  epoch {epoch:02d}/{EPOCHS}  train {run/max(seen,1):.4f}  "
+              f"val {vm['loss']:.4f}  acc {vm['accuracy']*100:.2f}%  ({time.time()-t0:.1f}s)")
 
     if best_state is not None:
         model.load_state_dict(best_state)
-        print(f"[finetune] restored best val={best_val*100:.2f}% from epoch {best_epoch}")
+        print(f"reloaded best epoch {best_epoch} ({best_acc*100:.2f}%)")
 
-    test_metrics = evaluate_classifier(model, test_loader, device, criterion)
-    y_true, y_pred, probs = collect_predictions(model, test_loader, device)
-    test_indices = load_indices("test")  # CIFAR-10 test indices in dataloader order
+    tm = evaluate_classifier(model, test_loader, device, crit)
+    yt, yp, probs = collect_predictions(model, test_loader, device)
+    test_indices = load_indices("test")
 
     return {
-        "val_accuracies": val_accuracies,
-        "best_val_accuracy": float(best_val),
+        "val_accuracies": accs,
+        "best_val_accuracy": float(best_acc),
         "best_epoch": int(best_epoch),
-        "test_accuracy": float(test_metrics["accuracy"]),
+        "test_accuracy": float(tm["accuracy"]),
         "model": model,
-        "predictions": {
-            "indices": test_indices,
-            "true": y_true,
-            "pred": y_pred,
-            "probs": probs,
-        },
+        "predictions": {"indices": test_indices, "true": yt, "pred": yp, "probs": probs},
     }
 
 
-def get_fixed_val_subset(num_images: int = PCA_TSNE_NUM_IMAGES) -> IndexedSubset:
-    
-    val_indices = load_indices("val")
+def get_fixed_val_subset(num=VIZ_NUM):
+    val_idx = load_indices("val")
     rng = np.random.default_rng(SEED)
-    chosen = rng.choice(np.asarray(val_indices), size=num_images, replace=False).tolist()
+    chosen = rng.choice(np.asarray(val_idx), size=num, replace=False).tolist()
     return IndexedSubset(get_cifar10_train(), chosen, transform=build_eval_transform())
 
 
-def _visualize(encoder: nn.Module, loader, save_path: str, title: str, device: torch.device) -> None:
-    features, labels = extract_features(encoder, loader, device)
-    save_2d_feature_plot(
-        features=features,
-        labels=labels,
-        out_path=save_path,
-        method=PCA_TSNE_METHOD,
-        title=title,
-        seed=SEED,
-    )
+def visualize(encoder, loader, out_path, title, device):
+    feats, labels = extract_features(encoder, loader, device)
+    save_2d_feature_plot(features=feats, labels=labels, out_path=out_path, title=title, seed=SEED)
 
 
-def generate_all_pca_tsne_plots(finetuned_model: ClassifierModel, device: torch.device) -> None:
-    """Generate the 3 plots required by Task 8."""
+def generate_all_tsne_plots(finetuned_model, device):
     subset = get_fixed_val_subset()
     loader = build_loader(subset, batch_size=128, shuffle=False)
 
-    rand_encoder = CIFARResNet18().to(device)
-    _visualize(rand_encoder, loader, RAND_PCA_PNG,
-               f"Random encoder ({PCA_TSNE_METHOD.upper()})", device)
+    rand_enc = CIFARResNet18().to(device)
+    visualize(rand_enc, loader, PLOT_RAND, f"Random encoder ({VIZ_METHOD.upper()})", device)
 
-    simclr_encoder = CIFARResNet18().to(device)
-    load_encoder_weights(simclr_encoder, SIMCLR_ENCODER_CKPT, map_location=device)
-    _visualize(simclr_encoder, loader, SIMCLR_PCA_PNG,
-               f"SimCLR encoder ({PCA_TSNE_METHOD.upper()})", device)
+    sim_enc = CIFARResNet18().to(device)
+    load_encoder_weights(sim_enc, SIMCLR_CKPT, map_location=device)
+    visualize(sim_enc, loader, PLOT_SIMCLR, f"SimCLR encoder ({VIZ_METHOD.upper()})", device)
 
-    _visualize(finetuned_model.encoder, loader, FT_PCA_PNG,
-               f"Fine-tuned encoder ({PCA_TSNE_METHOD.upper()})", device)
+    visualize(finetuned_model.encoder, loader, PLOT_FT, f"Fine-tuned encoder ({VIZ_METHOD.upper()})", device)
 
 
-def write_test_predictions(predictions: Dict, out_path: str = TEST_PREDS_CSV) -> None:
+def write_test_predictions(predictions, out_path=PREDS_OUT):
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     indices = predictions["indices"]
-    y_true = predictions["true"]
-    y_pred = predictions["pred"]
-    probs = predictions["probs"]
-    with open(out_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        header = (
-            ["image_index", "true_label", "predicted_label"]
-            + [f"prob_class_{c}" for c in range(10)]
-        )
-        writer.writerow(header)
-        for img_idx, t, p, prob_row in zip(indices, y_true, y_pred, probs):
-            writer.writerow([int(img_idx), int(t), int(p)] + [float(x) for x in prob_row])
+    yt, yp, probs = predictions["true"], predictions["pred"], predictions["probs"]
+    with open(out_path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["image_index", "true_label", "predicted_label"] + [f"prob_class_{c}" for c in range(10)])
+        for i, (t, p, row) in enumerate(zip(indices, zip(yt, yp), probs)):
+            tt, pp = p
+            w.writerow([int(i), int(tt), int(pp)] + [float(x) for x in row])
 
 
-def main() -> None:
-    ensure_dir("graphs")
-    ensure_dir("models")
-    ensure_dir("results")
+def main():
+    for d in ("graphs", "models", "results"):
+        ensure_dir(d)
 
     set_seed(SEED)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     ft = fine_tune_simclr(device)
+    torch.save(ft["model"].state_dict(), FT_CKPT)
+    plot_accuracy_curves({"SimCLR fine-tuning": ft["val_accuracies"]}, FT_PLOT,
+                         title="Fine-tuning (val accuracy)")
 
-    torch.save(ft["model"].state_dict(), FINETUNED_CKPT)
-    plot_accuracy_curves(
-        {"SimCLR fine-tuning": ft["val_accuracies"]},
-        FT_PLOT,
-        title="Fine-tuning — validation accuracy",
-    )
-
-    generate_all_pca_tsne_plots(ft["model"], device)
+    generate_all_tsne_plots(ft["model"], device)
     write_test_predictions(ft["predictions"])
 
     summary = {
@@ -221,20 +155,16 @@ def main() -> None:
         "best_val_accuracy": ft["best_val_accuracy"],
         "best_epoch": ft["best_epoch"],
         "epochs": EPOCHS,
-        "learning_rate": LEARNING_RATE,
+        "learning_rate": LR,
         "batch_size": BATCH_SIZE,
     }
-    with open(RESULTS_JSON, "w", encoding="utf-8") as f:
+    with open(RESULTS_OUT, "w") as f:
         json.dump(summary, f, indent=2)
 
-    print("\n=== Fine-tune + Task 8 results ===")
-    print(f"Test accuracy        : {ft['test_accuracy']*100:.2f}%")
-    print(f"Best val (epoch {ft['best_epoch']:>2}) : {ft['best_val_accuracy']*100:.2f}%")
-    print(f"Saved model          -> {FINETUNED_CKPT}")
-    print(f"Saved curve          -> {FT_PLOT}")
-    print(f"Saved PCA/t-SNE      -> {RAND_PCA_PNG}, {SIMCLR_PCA_PNG}, {FT_PCA_PNG}")
-    print(f"Saved predictions    -> {TEST_PREDS_CSV}")
-    print(f"Saved summary        -> {RESULTS_JSON}")
+    print(f"test acc {ft['test_accuracy']*100:.2f}%  best val {ft['best_val_accuracy']*100:.2f}% (epoch {ft['best_epoch']})")
+    print(f"saved {FT_CKPT}, {FT_PLOT}")
+    print(f"saved {PLOT_RAND}, {PLOT_SIMCLR}, {PLOT_FT}")
+    print(f"saved {PREDS_OUT}, {RESULTS_OUT}")
 
 
 if __name__ == "__main__":
