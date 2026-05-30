@@ -51,7 +51,7 @@ def base_metrics():
         "github_repo_url": GITHUB_URL,
         "first_commit_date": "2026-05-20",
         "last_commit_before_deadline": "2026-05-31",
-        "number_of_meaningful_commits": 27,
+        "number_of_meaningful_commits": 30,
     }
 
 
