@@ -55,9 +55,9 @@ TEST_PREDS_CSV: str = "results/test_predictions.csv"
 
 PCA_TSNE_METHOD: str = "tsne"        # spec allows pca or tsne
 PCA_TSNE_NUM_IMAGES: int = 1000
-RAND_PCA_PNG: str = "results/random_encoder_pca_or_tsne.png"
-SIMCLR_PCA_PNG: str = "results/simclr_encoder_pca_or_tsne.png"
-FT_PCA_PNG: str = "results/finetuned_encoder_pca_or_tsne.png"
+RAND_PCA_PNG: str = "results/random_encoder_tsne.png"
+SIMCLR_PCA_PNG: str = "results/simclr_encoder_tsne.png"
+FT_PCA_PNG: str = "results/finetuned_encoder_tsne.png"
 
 
 def _build_loaders():
