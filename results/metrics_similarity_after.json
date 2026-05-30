@@ -1,0 +1,8 @@
+{
+  "encoder": "CIFARResNet18 (loaded from models/simclr_encoder.pt)",
+  "split": "val (first 8 images)",
+  "small_batch_for_heatmap": 8,
+  "same_view_similarity_after_small": 0.908797025680542,
+  "different_image_similarity_after_small": 0.43885940313339233,
+  "gap_after_small": 0.46993762254714966
+}
